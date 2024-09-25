@@ -304,12 +304,16 @@ public class BrokerController {
         final NettyClientConfig nettyClientConfig,
         final MessageStoreConfig messageStoreConfig
     ) {
+        // 4大配置对象
         this.brokerConfig = brokerConfig;
         this.nettyServerConfig = nettyServerConfig;
         this.nettyClientConfig = nettyClientConfig;
         this.messageStoreConfig = messageStoreConfig;
+
         this.setStoreHost(new InetSocketAddress(this.getBrokerConfig().getBrokerIP1(), getListenPort()));
         this.brokerStatsManager = messageStoreConfig.isEnableLmq() ? new LmqBrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat()) : new BrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat());
+
+        // Consumer消费进度记录管理类
         this.broadcastOffsetManager = new BroadcastOffsetManager(this);
         if (this.messageStoreConfig.isEnableRocksDBStore()) {
             this.topicConfigManager = messageStoreConfig.isEnableLmq() ? new RocksDBLmqTopicConfigManager(this) : new RocksDBTopicConfigManager(this);
@@ -320,9 +324,15 @@ public class BrokerController {
             this.subscriptionGroupManager = messageStoreConfig.isEnableLmq() ? new LmqSubscriptionGroupManager(this) : new SubscriptionGroupManager(this);
             this.consumerOffsetManager = messageStoreConfig.isEnableLmq() ? new LmqConsumerOffsetManager(this) : new ConsumerOffsetManager(this);
         }
+
+        //topicConfigManager 消息Topic维度的管理查询类，管理topic和topic相关配置关系
         this.topicQueueMappingManager = new TopicQueueMappingManager(this);
+
+        // Consumer端使用pull的方式向Broker拉取消息请求的处理类
         this.pullMessageProcessor = new PullMessageProcessor(this);
         this.peekMessageProcessor = new PeekMessageProcessor(this);
+
+        // Consumer端使用pull的方式拉取请求时，保存请求，当有消息达到时进行推送处理类
         this.pullRequestHoldService = messageStoreConfig.isEnableLmq() ? new LmqPullRequestHoldService(this) : new PullRequestHoldService(this);
         this.popMessageProcessor = new PopMessageProcessor(this);
         this.notificationProcessor = new NotificationProcessor(this);
@@ -331,25 +341,36 @@ public class BrokerController {
         this.changeInvisibleTimeProcessor = new ChangeInvisibleTimeProcessor(this);
         this.sendMessageProcessor = new SendMessageProcessor(this);
         this.replyMessageProcessor = new ReplyMessageProcessor(this);
+
+        // 消息到达Broker的时候的监听回调类，这里调用到pullRequestHoldService，用于处理拉取请求
         this.messageArrivingListener = new NotifyMessageArrivingListener(this.pullRequestHoldService, this.popMessageProcessor, this.notificationProcessor);
+        // 消费者id变化监听器
         this.consumerIdsChangeListener = new DefaultConsumerIdsChangeListener(this);
+        // 消费者管理类 按照group进行分组，对消费者的id变化进行监听
         this.consumerManager = new ConsumerManager(this.consumerIdsChangeListener, this.brokerStatsManager, this.brokerConfig);
+        // 生产者管理，按照group进行分类
         this.producerManager = new ProducerManager(this.brokerStatsManager);
+        // 消费者的过滤管理类，按照topic进行分类
         this.consumerFilterManager = new ConsumerFilterManager(this);
         this.consumerOrderInfoManager = new ConsumerOrderInfoManager(this);
         this.popInflightMessageCounter = new PopInflightMessageCounter(this);
+        // 心跳连接处理类
         this.clientHousekeepingService = new ClientHousekeepingService(this);
+        // 控制台用的
         this.broker2Client = new Broker2Client(this);
+        // subscriptionGroupManager 订阅关系管理类
         this.scheduleMessageService = new ScheduleMessageService(this);
         this.coldDataPullRequestHoldService = new ColdDataPullRequestHoldService(this);
         this.coldDataCgCtrService = new ColdDataCgCtrService(this);
 
         if (nettyClientConfig != null) {
+            // broker 对外的api
             this.brokerOuterAPI = new BrokerOuterAPI(nettyClientConfig);
         }
 
         this.queryAssignmentProcessor = new QueryAssignmentProcessor(this);
         this.clientManageProcessor = new ClientManageProcessor(this);
+        // 从broker同步进度管理类
         this.slaveSynchronize = new SlaveSynchronize(this);
         this.endTransactionProcessor = new EndTransactionProcessor(this);
 
@@ -358,6 +379,7 @@ public class BrokerController {
         this.pullThreadPoolQueue = new LinkedBlockingQueue<>(this.brokerConfig.getPullThreadPoolQueueCapacity());
         this.litePullThreadPoolQueue = new LinkedBlockingQueue<>(this.brokerConfig.getLitePullThreadPoolQueueCapacity());
 
+        // 各种线程池所需的一堆阻塞队列
         this.ackThreadPoolQueue = new LinkedBlockingQueue<>(this.brokerConfig.getAckThreadPoolQueueCapacity());
         this.replyThreadPoolQueue = new LinkedBlockingQueue<>(this.brokerConfig.getReplyThreadPoolQueueCapacity());
         this.queryThreadPoolQueue = new LinkedBlockingQueue<>(this.brokerConfig.getQueryThreadPoolQueueCapacity());
@@ -370,6 +392,7 @@ public class BrokerController {
 
         this.brokerFastFailure = new BrokerFastFailure(this);
 
+        // 关注集群也可以有自己的conf配置
         String brokerConfigPath;
         if (brokerConfig.getBrokerConfigPath() != null && !brokerConfig.getBrokerConfigPath().isEmpty()) {
             brokerConfigPath = brokerConfig.getBrokerConfigPath();
@@ -738,11 +761,17 @@ public class BrokerController {
     }
 
     public boolean initializeMetadata() {
+        // 从磁盘中初始化topicConfigManager，读取路径：/path/to/rocketmq/store/config/topic.json
         boolean result = this.topicConfigManager.load();
+        // Topic队列与Topic的映射关系管理对象，读取路径：/path/to/rocketmq/store/config/topicQueueMapping.json
         result = result && this.topicQueueMappingManager.load();
+        // 加载消费偏移，读取路径：/path/to/rocketmq/store/config/consumerOffset.json
         result = result && this.consumerOffsetManager.load();
+        // 加载消费组组信息，读取路径：/path/to/rocketmq/store/config/subscriptionGroup.json
         result = result && this.subscriptionGroupManager.load();
+        // 加载过滤器配置，读取路径：/path/to/rocketmq/store/config/consumerFilter.json
         result = result && this.consumerFilterManager.load();
+        // 有序消费信息管理对象，读取路径：/path/to/rocketmq/store/config/consumerOrderInfo.json
         result = result && this.consumerOrderInfoManager.load();
         return result;
     }
@@ -750,13 +779,14 @@ public class BrokerController {
     public boolean initializeMessageStore() {
         boolean result = true;
         try {
+            // 创建默认的消息存储管理组件，默认使用commitLog管理磁盘消息
             DefaultMessageStore defaultMessageStore;
+            // 如果使用Dleger管理的话，那么就换种方式来进行 commitlog初始化相关信息
             if (this.messageStoreConfig.isEnableRocksDBStore()) {
                 defaultMessageStore = new RocksDBMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener, this.brokerConfig, topicConfigManager.getTopicConfigTable());
             } else {
                 defaultMessageStore = new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener, this.brokerConfig, topicConfigManager.getTopicConfigTable());
             }
-
             if (messageStoreConfig.isEnableDLegerCommitLog()) {
                 DLedgerRoleChangeHandler roleChangeHandler =
                     new DLedgerRoleChangeHandler(this, defaultMessageStore);
@@ -764,9 +794,10 @@ public class BrokerController {
                     .getdLedgerServer().getDLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
             }
 
+            // Broker的消息统计类
             this.brokerStats = new BrokerStats(defaultMessageStore);
 
-            // Load store plugin
+            // Load store plugin 加载插件，提供一个加载外部文件的口子
             MessageStorePluginContext context = new MessageStorePluginContext(
                 messageStoreConfig, brokerStatsManager, messageArrivingListener, brokerConfig, configuration);
             this.messageStore = MessageStoreFactory.build(context, defaultMessageStore);
@@ -786,6 +817,7 @@ public class BrokerController {
     }
 
     public boolean initialize() throws CloneNotSupportedException {
+        // user.home = /path/to/rocketmq/store/data
 
         boolean result = this.initializeMetadata();
         if (!result) {
@@ -811,6 +843,7 @@ public class BrokerController {
 
         if (messageStore != null) {
             registerMessageStoreHook();
+            // 加载消息的日志文件，包含CommitLog、ConsumerQueue等等
             result = this.messageStore.load();
         }
 
@@ -831,18 +864,25 @@ public class BrokerController {
 
         if (result) {
 
+            // 初始化接收消息处理的Netty服务器
             initializeRemotingServer();
 
+            // 初始化线程池相关的资源
             initializeResources();
 
+            // 为线程池注册一堆各种Processor处理器来处理对应的业务逻辑
             registerProcessor();
 
+            // 初始化一些定时作业任务，比如定时更新NameServer的信息
             initializeScheduledTasks();
 
+            // 初始化消息事务相关Manager和Listener
             initialTransaction();
 
+            // 初始化权限控制校验的相关组件
             initialAcl();
 
+            // 初始化一些钩子函数
             initialRpcHooks();
 
             if (TlsSystemConfig.tlsMode != TlsMode.DISABLED) {
@@ -1642,6 +1682,7 @@ public class BrokerController {
             isIsolated = true;
         }
 
+        // 调用NameServer的通信组件启动
         if (this.brokerOuterAPI != null) {
             this.brokerOuterAPI.start();
         }
@@ -1665,6 +1706,7 @@ public class BrokerController {
                         BrokerController.LOG.info("Skip register for broker is isolated");
                         return;
                     }
+                    // 向所有NameServer进行挨个注册Broker自己
                     BrokerController.this.registerBrokerAll(true, false, brokerConfig.isForceRegister());
                 } catch (Throwable e) {
                     BrokerController.LOG.error("registerBrokerAll Exception", e);
@@ -1688,6 +1730,7 @@ public class BrokerController {
         }
 
         if (this.brokerConfig.isEnableControllerMode()) {
+            // 有条件的发送定时心跳
             scheduleSendHeartbeat();
         }
 

@@ -41,12 +41,21 @@ import org.apache.rocketmq.srvutil.ServerUtil;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
 
+/**
+ * 启动步骤
+ * 1. 设置VM Option 参数： -Duser.home="/path/to/rocketmq/store/data"
+ * 2. 设置Arguments: -c /path/to/rocketmq/conf/custom.conf -n 127.0.0.1:9876
+ * 3. 设置Environment 变量: ROCKETMQ_HOME=/path/to/rocketmq/broker
+ */
 public class BrokerStartup {
 
     public static Logger log;
     public static final SystemConfigFileHelper CONFIG_FILE_HELPER = new SystemConfigFileHelper();
 
     public static void main(String[] args) {
+        // 1. 创建BrokerController
+        // 2. 启动BrokerController
+        // 额外再说明下，BrokerController 是Broker的大总管，管理和控制着Broker的各个模块
         start(createBrokerController(args));
     }
 
@@ -82,13 +91,21 @@ public class BrokerStartup {
     public static BrokerController buildBrokerController(String[] args) throws Exception {
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
 
+        // 创建四大配置类
+        // brokerConfig：Broker服务自己本身的配置，比如brokerClusterName、、brokerName默认是本机的hostName,brokerId
+        // nettyServerConfig: Broker作为服务端，开启端口服务接收消息的请求的Netty服务端配置
+        // nettyClientConfig: Broker作为客户端，链接NameServer的Netty客户端配置
+        // messageStoreConfig: 消息存储相关的配置
         final BrokerConfig brokerConfig = new BrokerConfig();
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
         final NettyClientConfig nettyClientConfig = new NettyClientConfig();
         final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
+        // Netty作为服务端的默认监听端口：10911
         nettyServerConfig.setListenPort(10911);
         messageStoreConfig.setHaListenPort(0);
 
+        // 解析命令行、或IDEA Arguments的参数，然后做相应的处理
+        // 后续自己开发的插件想要接收启动命令行参数的话，也可以参考着做
         Options options = ServerUtil.buildCommandlineOptions(new Options());
         CommandLine commandLine = ServerUtil.parseCmdLine(
             "mqbroker", args, buildCommandlineOptions(options), new DefaultParser());
@@ -106,6 +123,7 @@ public class BrokerStartup {
             }
         }
 
+        // 将Broker.conf中配置的一些属性全部填充4大配置中去
         if (properties != null) {
             properties2SystemEnv(properties);
             MixAll.properties2Object(properties, brokerConfig);
@@ -122,6 +140,8 @@ public class BrokerStartup {
         }
 
         // Validate namesrvAddr
+        // 检查namesrvAddr 配置值的正确性，从这个解析逻辑来看
+        // namesrvAddr 可以配置多个地址，通过英文符号隔开的而已
         String namesrvAddr = brokerConfig.getNamesrvAddr();
         if (StringUtils.isNotBlank(namesrvAddr)) {
             try {
@@ -136,15 +156,26 @@ public class BrokerStartup {
             }
         }
 
+        // 如果是Master节点，消息占用内存百分比默认是40的话
+        // 那么Slave节点，消息占用内存百分比减去10的话，则占用内存百分比是30
         if (BrokerRole.SLAVE == messageStoreConfig.getBrokerRole()) {
             int ratio = messageStoreConfig.getAccessMessageInMemoryMaxRatio() - 10;
             messageStoreConfig.setAccessMessageInMemoryMaxRatio(ratio);
         }
 
         // Set broker role according to ha config
+        // 检查Broker节点的角色，有【异步Master】、【同步Master】、【Slave】三种角色
         if (!brokerConfig.isEnableControllerMode()) {
             switch (messageStoreConfig.getBrokerRole()) {
+                // 异步master:表示Producer发送消息给Master后
+                // Master自己保存成功后，就直接响应Producer了，
+                // 然后异步将收到的消息复制给Slave
                 case ASYNC_MASTER:
+                // 同步Master:表示Producer发送消息给Master后，Master自己保存成功后，
+                // 不响应Producer，而是等待Slave同步成功后才响应Producer，不过这里只需要其中一个Slave复制成功了
+                // 那么Master就可以响应Producer了,类似于同步双写
+                // 但是这里仅仅只有一个Master和Salve保存了，其他的Salve是否存储则没有保证机制
+                // 而且这里的消息保存也仅仅是到PageCache级别，还未刷盘将操作系统的缓存刷到磁盘中去，取决于刷盘策略
                 case SYNC_MASTER:
                     brokerConfig.setBrokerId(MixAll.MASTER_ID);
                     break;
@@ -168,6 +199,7 @@ public class BrokerStartup {
             System.exit(-4);
         }
 
+        // 消息存储HA监听端口默认是10912
         if (messageStoreConfig.getHaListenPort() <= 0) {
             messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);
         }
@@ -204,6 +236,11 @@ public class BrokerStartup {
         MixAll.printObjectProperties(log, nettyClientConfig);
         MixAll.printObjectProperties(log, messageStoreConfig);
 
+        // 将4大配置，全部装进BrokerController当中
+        // 然后该BrokerController在构造方法中还创建了：
+        // 各种Manager管理对象
+        // 各种Processor处理对象
+        // 各种Queue队列对象...等等
         final BrokerController controller = new BrokerController(
             brokerConfig, nettyServerConfig, nettyClientConfig, messageStoreConfig);
 
@@ -236,12 +273,17 @@ public class BrokerStartup {
 
     public static BrokerController createBrokerController(String[] args) {
         try {
+            // 构建BrokerController控制器对象，里面富含各种Config配置对象，manager管理对象
             BrokerController controller = buildBrokerController(args);
+            // 对象创建完了后，再进行初始化动作，主要是发一些数据的填充加载
             boolean initResult = controller.initialize();
+            // 初始化失败，那就尝试关闭BrokerController,然后进行进程关闭
             if (!initResult) {
                 controller.shutdown();
                 System.exit(-3);
             }
+            // 注册一个运行时的钩子线程
+            // 在JVM进程关闭的时候，会尝试触发调用运行时钩子集合中的所有线程以此来达到回收目的
             Runtime.getRuntime().addShutdownHook(new Thread(buildShutdownHook(controller)));
             return controller;
         } catch (Throwable e) {
